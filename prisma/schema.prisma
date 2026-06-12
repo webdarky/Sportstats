@@ -1,0 +1,290 @@
+// =============================================================================
+// Canonical Sports Statistics Schema
+// -----------------------------------------------------------------------------
+// Modeled on the Opta F24 event taxonomy + Sportmonks type dictionary, per the
+// architecture blueprint (Part 2b). The design goals:
+//   * Store EVERY provider's native ID — never discard (ProviderIdMap).
+//   * Keep raw per-source observations (StatValue) separate from the computed
+//     truth (ConsensusValue) so lineage is fully auditable.
+//   * Model events in Opta style: (eventType, qualifiers[], x, y, period, ...).
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- Reference / hierarchy ---------------------------------------------------
+
+model Sport {
+  id           String        @id @default(cuid())
+  slug         String        @unique // "football", "basketball", "tennis"
+  name         String
+  // bet365-style popularity ordering (lower = more prominent). Blueprint Part 4.
+  priority     Int           @default(100)
+  competitions Competition[]
+  teams        Team[]
+  players      Player[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model Country {
+  id           String        @id @default(cuid())
+  isoCode      String?       @unique // "GB", "ES" (null for international bodies)
+  name         String
+  competitions Competition[]
+  teams        Team[]
+}
+
+model Competition {
+  id        String   @id @default(cuid())
+  slug      String   @unique // "england-premier-league"
+  name      String
+  tier      Int? // 1 = top division
+  sport     Sport    @relation(fields: [sportId], references: [id])
+  sportId   String
+  country   Country? @relation(fields: [countryId], references: [id])
+  countryId String? // null => international (UCL, World Cup)
+  seasons   Season[]
+  createdAt DateTime @default(now())
+
+  @@index([sportId])
+  @@index([countryId])
+}
+
+model Season {
+  id            String      @id @default(cuid())
+  label         String // "2024/2025"
+  startDate     DateTime?
+  endDate       DateTime?
+  competition   Competition @relation(fields: [competitionId], references: [id])
+  competitionId String
+  matches       Match[]
+
+  @@unique([competitionId, label])
+  @@index([competitionId])
+}
+
+// --- Participants ------------------------------------------------------------
+
+model Team {
+  id          String       @id @default(cuid())
+  name        String
+  shortName   String?
+  sport       Sport        @relation(fields: [sportId], references: [id])
+  sportId     String
+  country     Country?     @relation(fields: [countryId], references: [id])
+  countryId   String?
+  homeMatches Match[]      @relation("HomeTeam")
+  awayMatches Match[]      @relation("AwayTeam")
+  rosters     RosterSpot[]
+  statValues  StatValue[]
+  createdAt   DateTime     @default(now())
+
+  @@index([sportId])
+}
+
+model Player {
+  id         String       @id @default(cuid())
+  fullName   String
+  birthYear  Int? // used as a blocking key during entity resolution
+  position   String?
+  sport      Sport        @relation(fields: [sportId], references: [id])
+  sportId    String
+  rosters    RosterSpot[]
+  events     Event[]
+  statValues StatValue[]
+  createdAt  DateTime     @default(now())
+
+  @@index([sportId])
+  @@index([fullName])
+}
+
+model RosterSpot {
+  id       String  @id @default(cuid())
+  team     Team    @relation(fields: [teamId], references: [id])
+  teamId   String
+  player   Player  @relation(fields: [playerId], references: [id])
+  playerId String
+  season   String // season label, denormalized for simple roster snapshots
+  shirtNo  Int?
+
+  @@unique([teamId, playerId, season])
+  @@index([playerId])
+}
+
+// --- Matches & events --------------------------------------------------------
+
+model Match {
+  id         String      @id @default(cuid())
+  season     Season      @relation(fields: [seasonId], references: [id])
+  seasonId   String
+  round      String? // "Matchweek 12", "Quarter-final"
+  kickoff    DateTime?
+  status     MatchStatus @default(SCHEDULED)
+  homeTeam   Team        @relation("HomeTeam", fields: [homeTeamId], references: [id])
+  homeTeamId String
+  awayTeam   Team        @relation("AwayTeam", fields: [awayTeamId], references: [id])
+  awayTeamId String
+  homeScore  Int?
+  awayScore  Int?
+  events     Event[]
+  statValues StatValue[]
+  createdAt  DateTime    @default(now())
+
+  @@index([seasonId])
+  @@index([kickoff])
+}
+
+enum MatchStatus {
+  SCHEDULED
+  LIVE
+  FINISHED
+  POSTPONED
+  CANCELLED
+}
+
+// Opta type_id dictionary (1=Pass, 16=Goal, 7=Tackle, ...). Blueprint Part 1.
+model EventType {
+  id     Int     @id // mirrors Opta type_id
+  code   String  @unique // "PASS", "GOAL", "TACKLE"
+  name   String
+  events Event[]
+}
+
+model Event {
+  id          String    @id @default(cuid())
+  match       Match     @relation(fields: [matchId], references: [id])
+  matchId     String
+  eventType   EventType @relation(fields: [eventTypeId], references: [id])
+  eventTypeId Int
+  player      Player?   @relation(fields: [playerId], references: [id])
+  playerId    String?
+  period      Int // 1 = first half
+  minute      Int
+  second      Int       @default(0)
+  // Opta pitch coordinates: 0-100 scale, defensive goal line = 0.
+  x           Float?
+  y           Float?
+  outcome     Int? // 0/1 (e.g. pass completed)
+  // Opta <Q> qualifiers, e.g. { "210": "assist", "1": "long_ball" }.
+  qualifiers  Json      @default("{}")
+  source      Source    @relation(fields: [sourceId], references: [id])
+  sourceId    String
+
+  @@index([matchId])
+  @@index([eventTypeId])
+}
+
+// --- Statistics: raw observations vs. computed consensus ---------------------
+
+// Canonical stat dictionary — our SUPERSET of Opta/Sportmonks/Sportradar codes.
+// See src/lib/stat-types/dictionary.ts for the seed list.
+model StatType {
+  id              String           @id // "corners", "shots_on_target", "xg"
+  name            String
+  unit            String? // "count", "percent", "xg"
+  isContinuous    Boolean          @default(true) // continuous vs categorical
+  statValues      StatValue[]
+  consensusValues ConsensusValue[]
+}
+
+// One row per (subject, stat, SOURCE). The raw, un-reconciled observation.
+model StatValue {
+  id         String   @id @default(cuid())
+  match      Match    @relation(fields: [matchId], references: [id])
+  matchId    String
+  statType   StatType @relation(fields: [statTypeId], references: [id])
+  statTypeId String
+  // Subject is either a team or a player (exactly one set).
+  team       Team?    @relation(fields: [teamId], references: [id])
+  teamId     String?
+  player     Player?  @relation(fields: [playerId], references: [id])
+  playerId   String?
+  value      Float
+  source     Source   @relation(fields: [sourceId], references: [id])
+  sourceId   String
+  // Source weight at ingest time + per-observation confidence. Blueprint Part 2e.
+  weightAtIngest Float
+  confidence     Float    @default(1.0)
+  ingestedAt     DateTime @default(now())
+
+  @@unique([matchId, statTypeId, teamId, playerId, sourceId])
+  @@index([matchId, statTypeId])
+  @@index([sourceId])
+}
+
+// The reconciled "truth" computed by the weighting engine across all sources.
+model ConsensusValue {
+  id         String   @id @default(cuid())
+  matchId    String
+  statType   StatType @relation(fields: [statTypeId], references: [id])
+  statTypeId String
+  teamId     String?
+  playerId   String?
+  value      Float // weighted consensus
+  // Spread of contributing observations; high variance => display as a range.
+  variance   Float    @default(0)
+  // Snapshot of contributing sources + weights for full lineage / audit.
+  contributors Json   @default("[]")
+  // True once anchored against official/Opta ground truth. Blueprint Part 2c.
+  anchored   Boolean  @default(false)
+  computedAt DateTime @default(now())
+
+  @@unique([matchId, statTypeId, teamId, playerId])
+  @@index([matchId, statTypeId])
+}
+
+// --- Sources & ID mapping ----------------------------------------------------
+
+model Source {
+  id               String          @id // "api_football", "opta", "sportmonks"
+  name             String
+  // Recommended reliability prior (0..1) from the blueprint comparison table.
+  reputationWeight Float
+  tier             SourceTier      @default(SELF_SERVE)
+  // Sources sharing this upstream are down-weighted to avoid false
+  // corroboration (copy detection). Blueprint Part 2c.5.
+  upstreamGroup    String?
+  events           Event[]
+  statValues       StatValue[]
+  idMappings       ProviderIdMap[]
+}
+
+enum SourceTier {
+  FREE
+  SELF_SERVE
+  MID_TIER
+  ENTERPRISE
+  SCRAPED
+}
+
+// Crosswalk: our canonical entity <-> a provider's native ID. Blueprint Part 2a.
+model ProviderIdMap {
+  id         String     @id @default(cuid())
+  source     Source     @relation(fields: [sourceId], references: [id])
+  sourceId   String
+  entityType EntityType
+  canonicalId String // our cuid for the Team/Player/Competition/...
+  nativeId   String // the provider's own ID
+  confidence Float      @default(1.0) // 1.0 = deterministic, <1 = fuzzy match
+  needsReview Boolean   @default(false)
+
+  @@unique([sourceId, entityType, nativeId])
+  @@index([entityType, canonicalId])
+}
+
+enum EntityType {
+  SPORT
+  COMPETITION
+  SEASON
+  TEAM
+  PLAYER
+  MATCH
+  VENUE
+}
