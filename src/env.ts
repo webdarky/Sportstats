@@ -48,8 +48,11 @@ function load() {
     throw new Error(`Invalid environment configuration:\n${issues}`);
   }
 
-  // Production guard: the core secrets must be present when deployed.
-  if (parsed.data.NODE_ENV === "production") {
+  // Production guard: the core secrets must be present when deployed. Skipped
+  // during `next build` (secrets are injected at runtime, not necessarily at
+  // build time) — enforced when the server actually boots/serves.
+  const isBuildPhase = process.env.NEXT_PHASE === "phase-production-build";
+  if (parsed.data.NODE_ENV === "production" && !isBuildPhase) {
     const required = [
       "JWT_SECRET",
       "NEXTAUTH_SECRET",

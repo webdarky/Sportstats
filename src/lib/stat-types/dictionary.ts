@@ -43,6 +43,9 @@ export const STAT_TYPES: StatTypeDef[] = [
   { id: "duels_won", name: "Duels Won", unit: "count", isContinuous: true },
   { id: "rating", name: "Player Rating", unit: "rating", isContinuous: true },
 
+  // Odds-derived (The Odds API): median bookmaker implied win probability.
+  { id: "win_probability", name: "Implied Win Probability", unit: "percent", isContinuous: true },
+
   // Categorical facts resolved by weighted plurality.
   { id: "goal_scorer", name: "Goal Scorer", unit: "boolean", isContinuous: false },
   { id: "result", name: "Match Result", unit: "boolean", isContinuous: false },
