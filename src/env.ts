@@ -13,8 +13,9 @@ const schema = z.object({
     .enum(["development", "test", "production"])
     .default("development"),
 
-  // Core datastore — required.
-  DATABASE_URL: z.string().url(),
+  // Core datastore — required at runtime, but not during `next build`: see
+  // the build-phase guard below.
+  DATABASE_URL: z.string().url().optional(),
 
   // Core secrets — required in production, optional locally so `npm run dev`
   // works before they are generated.
@@ -48,10 +49,17 @@ function load() {
     throw new Error(`Invalid environment configuration:\n${issues}`);
   }
 
-  // Production guard: the core secrets must be present when deployed. Skipped
-  // during `next build` (secrets are injected at runtime, not necessarily at
-  // build time) — enforced when the server actually boots/serves.
+  // Build-phase guard: `next build` statically imports route modules to
+  // collect page data, which runs this file even though no request is ever
+  // served. DATABASE_URL (and the production secrets below) are injected at
+  // deploy/runtime, not necessarily present at build time, so skip requiring
+  // them during the build phase and enforce when the server actually
+  // boots/serves.
   const isBuildPhase = process.env.NEXT_PHASE === "phase-production-build";
+  if (!isBuildPhase && !parsed.data.DATABASE_URL) {
+    throw new Error("Missing required environment variable: DATABASE_URL");
+  }
+
   if (parsed.data.NODE_ENV === "production" && !isBuildPhase) {
     const required = [
       "JWT_SECRET",
