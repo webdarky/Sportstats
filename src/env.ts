@@ -23,8 +23,9 @@ const schema = z.object({
   // preview that has a database attached for ingestion only).
   DATA_SOURCE: z.enum(["demo", "postgres"]).optional(),
 
-  // Core secrets — required in production, optional locally so `npm run dev`
-  // works before they are generated.
+  // Feature secrets. All optional here; each is enforced by the feature that
+  // consumes it (see the note in load()), so an unconfigured feature never
+  // takes down the rest of the deployment.
   JWT_SECRET: z.string().min(16).optional(),
   NEXTAUTH_SECRET: z.string().min(16).optional(),
   ENCRYPTION_KEY: z.string().length(64).optional(), // 32-byte hex
