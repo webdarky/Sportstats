@@ -1,4 +1,5 @@
-import { db } from "../db";
+import type { PrismaClient } from "@prisma/client";
+import { getDb } from "../db";
 import {
   AUTO_MATCH_THRESHOLD,
   resolveEntity,
@@ -20,9 +21,14 @@ const SPORT_SLUG = "football";
 export class PrismaIngestRepository implements IngestRepository {
   private sportIdCache: string | null = null;
 
+  /** Resolved on first use; throws if no DATABASE_URL is configured. */
+  private get db(): PrismaClient {
+    return getDb();
+  }
+
   private async sportId(): Promise<string> {
     if (this.sportIdCache) return this.sportIdCache;
-    const sport = await db.sport.upsert({
+    const sport = await this.db.sport.upsert({
       where: { slug: SPORT_SLUG },
       update: {},
       create: { slug: SPORT_SLUG, name: "Football" },
@@ -33,7 +39,7 @@ export class PrismaIngestRepository implements IngestRepository {
 
   private async competitionId(slug: string): Promise<string> {
     const sportId = await this.sportId();
-    const comp = await db.competition.upsert({
+    const comp = await this.db.competition.upsert({
       where: { slug },
       update: {},
       create: { slug, name: slug, sportId },
@@ -48,7 +54,7 @@ export class PrismaIngestRepository implements IngestRepository {
         ? kickoff.getUTCFullYear()
         : kickoff.getUTCFullYear() - 1;
     const label = `${year}/${year + 1}`;
-    const season = await db.season.upsert({
+    const season = await this.db.season.upsert({
       where: { competitionId_label: { competitionId, label } },
       update: {},
       create: { competitionId, label },
@@ -62,7 +68,7 @@ export class PrismaIngestRepository implements IngestRepository {
     name: string;
   }): Promise<string> {
     // 1. Deterministic crosswalk hit.
-    const existing = await db.providerIdMap.findUnique({
+    const existing = await this.db.providerIdMap.findUnique({
       where: {
         sourceId_entityType_nativeId: {
           sourceId: input.sourceId,
@@ -75,7 +81,7 @@ export class PrismaIngestRepository implements IngestRepository {
 
     // 2/3. Exact / fuzzy match against known teams in this sport.
     const sportId = await this.sportId();
-    const teams = await db.team.findMany({ where: { sportId } });
+    const teams = await this.db.team.findMany({ where: { sportId } });
     const candidates: Candidate[] = teams.map((t) => ({
       canonicalId: t.id,
       name: t.name,
@@ -94,7 +100,7 @@ export class PrismaIngestRepository implements IngestRepository {
       confidence = resolution.confidence;
     } else {
       // Create a new canonical team (review-flagged if it was a near miss).
-      const created = await db.team.create({
+      const created = await this.db.team.create({
         data: { name: input.name, sportId },
       });
       canonicalId = created.id;
@@ -104,7 +110,7 @@ export class PrismaIngestRepository implements IngestRepository {
       }
     }
 
-    await db.providerIdMap.create({
+    await this.db.providerIdMap.create({
       data: {
         sourceId: input.sourceId,
         entityType: "TEAM",
@@ -125,7 +131,7 @@ export class PrismaIngestRepository implements IngestRepository {
     homeTeam: { nativeId: string; name: string };
     awayTeam: { nativeId: string; name: string };
   }): Promise<ResolvedMatch> {
-    const mapped = await db.providerIdMap.findUnique({
+    const mapped = await this.db.providerIdMap.findUnique({
       where: {
         sourceId_entityType_nativeId: {
           sourceId: fixture.sourceId,
@@ -159,16 +165,16 @@ export class PrismaIngestRepository implements IngestRepository {
     const dayEnd = new Date(dayStart);
     dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
 
-    const existingMatch = await db.match.findFirst({
+    const existingMatch = await this.db.match.findFirst({
       where: { seasonId, homeTeamId, awayTeamId, kickoff: { gte: dayStart, lt: dayEnd } },
     });
     const match =
       existingMatch ??
-      (await db.match.create({
+      (await this.db.match.create({
         data: { seasonId, homeTeamId, awayTeamId, kickoff: fixture.kickoff },
       }));
 
-    await db.providerIdMap.create({
+    await this.db.providerIdMap.create({
       data: {
         sourceId: fixture.sourceId,
         entityType: "MATCH",
@@ -189,7 +195,7 @@ export class PrismaIngestRepository implements IngestRepository {
     value: number;
     weightAtIngest: number;
   }): Promise<void> {
-    const existing = await db.statValue.findFirst({
+    const existing = await this.db.statValue.findFirst({
       where: {
         matchId: obs.matchId,
         statTypeId: obs.statTypeId,
@@ -199,12 +205,12 @@ export class PrismaIngestRepository implements IngestRepository {
       },
     });
     if (existing) {
-      await db.statValue.update({
+      await this.db.statValue.update({
         where: { id: existing.id },
         data: { value: obs.value, weightAtIngest: obs.weightAtIngest, ingestedAt: new Date() },
       });
     } else {
-      await db.statValue.create({
+      await this.db.statValue.create({
         data: {
           matchId: obs.matchId,
           statTypeId: obs.statTypeId,
@@ -225,7 +231,7 @@ export class PrismaIngestRepository implements IngestRepository {
     variance: number;
     contributors: Array<{ sourceId: string; value: number; weight: number }>;
   }): Promise<void> {
-    const existing = await db.consensusValue.findFirst({
+    const existing = await this.db.consensusValue.findFirst({
       where: { matchId: c.matchId, statTypeId: c.statTypeId, teamId: c.teamId, playerId: null },
     });
     const data = {
@@ -235,9 +241,9 @@ export class PrismaIngestRepository implements IngestRepository {
       computedAt: new Date(),
     };
     if (existing) {
-      await db.consensusValue.update({ where: { id: existing.id }, data });
+      await this.db.consensusValue.update({ where: { id: existing.id }, data });
     } else {
-      await db.consensusValue.create({
+      await this.db.consensusValue.create({
         data: {
           matchId: c.matchId,
           statTypeId: c.statTypeId,

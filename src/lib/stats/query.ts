@@ -1,18 +1,18 @@
 import { jaroWinkler, normalizeName } from "../entity-resolution/jaro-winkler";
 import { STAT_TYPES, STAT_TYPE_BY_ID } from "../stat-types/dictionary";
-import { demoCompetitions, demoMatches, demoTeams, findTeam } from "../demo/dataset";
 import {
   buildTeamStatGames,
   summarize,
   timeframeToSince,
   type StatSummary,
 } from "./calculators";
+import { getRepository, resolveRepository, type DataMode } from "./repository";
 import type { Competition, Team } from "./types";
 
 /**
- * Read-side query layer powering the API and UI. Currently backed by the
- * deterministic demo dataset; swap the data source for the Prisma read models
- * once a database is connected — the function signatures stay the same.
+ * Read-side query layer powering the API and UI. It is source-agnostic: the
+ * repository underneath is either the demo dataset or Postgres, chosen by
+ * configuration (see repository.ts). Callers get the same shapes either way.
  */
 
 export interface SearchResult {
@@ -37,21 +37,33 @@ export function detectStat(query: string): string | undefined {
   return undefined;
 }
 
-/** Fuzzy search teams (the primary entry point from the blueprint's search bar). */
-export function searchTeams(query: string, limit = 8): SearchResult[] {
-  const detectedStat = detectStat(query);
-  // Strip the detected stat words so "arsenal corners" still matches "arsenal".
+/** Strip detected stat words so "arsenal corners" still matches "arsenal". */
+function teamPortionOf(query: string, detectedStat: string | undefined): string {
   let teamQuery = normalizeName(query);
-  if (detectedStat) {
-    for (const w of STAT_TYPE_BY_ID.get(detectedStat)?.name.toLowerCase().split(" ") ?? []) {
-      teamQuery = teamQuery.replace(normalizeName(w), "").trim();
-    }
-    teamQuery = teamQuery.replace(detectedStat.replace(/_/g, " "), "").trim();
+  if (!detectedStat) return teamQuery;
+
+  const statName = STAT_TYPE_BY_ID.get(detectedStat)?.name.toLowerCase() ?? "";
+  for (const w of statName.split(" ")) {
+    teamQuery = teamQuery.replace(normalizeName(w), "").trim();
   }
+  return teamQuery.replace(detectedStat.replace(/_/g, " "), "").trim();
+}
 
-  const compBySlug = new Map(demoCompetitions.map((c) => [c.slug, c]));
+/**
+ * Rank teams against a query. Pure, so it can be unit-tested against a fixed
+ * team list without a repository.
+ */
+export function rankTeams(
+  query: string,
+  teams: Team[],
+  competitions: Competition[],
+  limit = 8,
+): SearchResult[] {
+  const detectedStat = detectStat(query);
+  const teamQuery = teamPortionOf(query, detectedStat);
+  const compBySlug = new Map(competitions.map((c) => [c.slug, c]));
 
-  const ranked = demoTeams
+  return teams
     .map((team) => {
       const name = normalizeName(team.name);
       const short = normalizeName(team.shortName);
@@ -68,22 +80,28 @@ export function searchTeams(query: string, limit = 8): SearchResult[] {
     .filter((r) => r.score > 0.5)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
-
-  return ranked;
 }
 
-export function listCompetitions(): Competition[] {
-  return demoCompetitions;
+/** Fuzzy search teams (the primary entry point from the blueprint's search bar). */
+export async function searchTeams(query: string, limit = 8): Promise<SearchResult[]> {
+  const repo = await getRepository();
+  const [teams, competitions] = await Promise.all([
+    repo.listTeams(),
+    repo.listCompetitions(),
+  ]);
+  return rankTeams(query, teams, competitions, limit);
 }
 
-export function listTeams(competitionSlug?: string): Team[] {
-  return competitionSlug
-    ? demoTeams.filter((t) => t.competitionSlug === competitionSlug)
-    : demoTeams;
+export async function listCompetitions(): Promise<Competition[]> {
+  return (await getRepository()).listCompetitions();
 }
 
-export function getTeam(id: string): Team | undefined {
-  return findTeam(id);
+export async function listTeams(competitionSlug?: string): Promise<Team[]> {
+  return (await getRepository()).listTeams(competitionSlug);
+}
+
+export async function getTeam(id: string): Promise<Team | undefined> {
+  return (await getRepository()).getTeam(id);
 }
 
 export interface TeamStatResult {
@@ -93,24 +111,33 @@ export interface TeamStatResult {
   timeframe: string;
   competitionSlug?: string;
   summary: StatSummary;
+  /** Which source actually served this payload. */
+  dataMode: DataMode;
 }
 
 /** The full dashboard payload for a team + stat (blueprint Part 4). */
-export function getTeamStat(params: {
+export async function getTeamStat(params: {
   teamId: string;
   statTypeId: string;
   timeframe?: string;
   competitionSlug?: string;
   now?: Date;
-}): TeamStatResult | null {
-  const team = findTeam(params.teamId);
+}): Promise<TeamStatResult | null> {
+  const { repo, active } = await resolveRepository();
+
+  const team = await repo.getTeam(params.teamId);
   if (!team) return null;
   const statDef = STAT_TYPE_BY_ID.get(params.statTypeId);
   if (!statDef) return null;
 
   const timeframe = params.timeframe ?? "all";
   const since = timeframeToSince(timeframe, params.now ?? new Date());
-  const games = buildTeamStatGames(demoMatches, params.teamId, params.statTypeId, {
+  const matches = await repo.matchesForTeam(params.teamId, {
+    since,
+    competitionSlug: params.competitionSlug,
+  });
+
+  const games = buildTeamStatGames(matches, params.teamId, params.statTypeId, {
     since,
     competitionSlug: params.competitionSlug,
   });
@@ -122,10 +149,11 @@ export function getTeamStat(params: {
     timeframe,
     competitionSlug: params.competitionSlug,
     summary: summarize(games),
+    dataMode: active,
   };
 }
 
-/** Stats that have demo coverage, for populating UI selectors. */
+/** Stats the UI offers selectors for. */
 export const SUPPORTED_STATS = [
   "corners",
   "yellow_cards",

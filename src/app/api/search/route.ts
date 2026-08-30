@@ -6,7 +6,7 @@ export async function GET(request: Request) {
   const q = new URL(request.url).searchParams.get("q")?.trim() ?? "";
   if (q.length < 2) return NextResponse.json({ results: [] });
 
-  const results = searchTeams(q).map((r) => ({
+  const results = (await searchTeams(q)).map((r) => ({
     teamId: r.team.id,
     name: r.team.name,
     shortName: r.team.shortName,

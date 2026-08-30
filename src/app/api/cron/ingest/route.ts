@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { env } from "@/env";
+import { env, hasDatabase } from "@/env";
 import { adapters } from "@/lib/providers";
 import { runIngestion } from "@/lib/ingest/pipeline";
 import { PrismaIngestRepository } from "@/lib/ingest/prisma-repository";
@@ -17,6 +17,30 @@ export async function GET(request: Request) {
   const auth = request.headers.get("authorization");
   if (!env.CRON_SECRET || auth !== `Bearer ${env.CRON_SECRET}`) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  // Ingestion writes to Postgres; without it there is nowhere to put the data.
+  if (!hasDatabase()) {
+    return NextResponse.json(
+      {
+        error: "no database configured",
+        detail:
+          "Set DATABASE_URL to enable ingestion. The app runs in demo mode until then.",
+      },
+      { status: 503 },
+    );
+  }
+
+  const configured = adapters.filter((a) => a.isConfigured());
+  if (configured.length === 0) {
+    return NextResponse.json(
+      {
+        error: "no providers configured",
+        detail:
+          "Set at least one provider key (e.g. API_FOOTBALL_KEY) to ingest data.",
+      },
+      { status: 503 },
+    );
   }
 
   const url = new URL(request.url);

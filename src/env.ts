@@ -13,9 +13,15 @@ const schema = z.object({
     .enum(["development", "test", "production"])
     .default("development"),
 
-  // Core datastore — required at runtime, but not during `next build`: see
-  // the build-phase guard below.
+  // Core datastore. Optional by design: with no DATABASE_URL the app serves the
+  // deterministic demo dataset (see lib/stats/repository.ts), which is what
+  // makes a zero-secret deploy possible. Ingestion requires it.
   DATABASE_URL: z.string().url().optional(),
+
+  // Read-side data source. Defaults to "postgres" when DATABASE_URL is set and
+  // "demo" otherwise; set explicitly to pin one (e.g. "demo" on a public
+  // preview that has a database attached for ingestion only).
+  DATA_SOURCE: z.enum(["demo", "postgres"]).optional(),
 
   // Core secrets — required in production, optional locally so `npm run dev`
   // works before they are generated.
@@ -49,33 +55,27 @@ function load() {
     throw new Error(`Invalid environment configuration:\n${issues}`);
   }
 
-  // Build-phase guard: `next build` statically imports route modules to
-  // collect page data, which runs this file even though no request is ever
-  // served. DATABASE_URL (and the production secrets below) are injected at
-  // deploy/runtime, not necessarily present at build time, so skip requiring
-  // them during the build phase and enforce when the server actually
-  // boots/serves.
-  const isBuildPhase = process.env.NEXT_PHASE === "phase-production-build";
-  if (!isBuildPhase && !parsed.data.DATABASE_URL) {
-    throw new Error("Missing required environment variable: DATABASE_URL");
-  }
-
-  if (parsed.data.NODE_ENV === "production" && !isBuildPhase) {
-    const required = [
-      "JWT_SECRET",
-      "NEXTAUTH_SECRET",
-      "ENCRYPTION_KEY",
-      "INTERNAL_API_SECRET",
-    ] as const;
-    const missing = required.filter((k) => !parsed.data[k]);
-    if (missing.length > 0) {
-      throw new Error(
-        `Missing required production secrets: ${missing.join(", ")}`,
-      );
-    }
-  }
-
+  // Secrets are validated per-feature by the code that consumes them, not
+  // blanket-required here. JWT_SECRET / NEXTAUTH_SECRET / ENCRYPTION_KEY /
+  // INTERNAL_API_SECRET are reserved for the auth and key-vault work and are
+  // read by nothing yet — demanding them at boot would take down a read-only
+  // deployment for features it does not run. Each consumer should fail closed
+  // when its secret is absent, the way /api/cron/ingest 401s without
+  // CRON_SECRET. Add the check here alongside the feature, not ahead of it.
   return parsed.data;
+}
+
+/** True when a database is configured; ingestion and the Postgres read path
+ *  both require it. */
+export function hasDatabase(): boolean {
+  return Boolean(env.DATABASE_URL);
+}
+
+/** Which read-side data source is active. Explicit DATA_SOURCE wins; otherwise
+ *  a configured database implies live data and its absence implies demo. */
+export function dataSource(): "demo" | "postgres" {
+  if (env.DATA_SOURCE) return env.DATA_SOURCE;
+  return env.DATABASE_URL ? "postgres" : "demo";
 }
 
 export const env = load();

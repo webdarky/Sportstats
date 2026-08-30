@@ -15,7 +15,12 @@ export async function GET(
   const timeframe = sp.get("timeframe") ?? "all";
   const competitionSlug = sp.get("competition") ?? undefined;
 
-  const result = getTeamStat({ teamId, statTypeId, timeframe, competitionSlug });
+  const result = await getTeamStat({
+    teamId,
+    statTypeId,
+    timeframe,
+    competitionSlug,
+  });
   if (!result) {
     return NextResponse.json(
       { error: "unknown team or stat" },

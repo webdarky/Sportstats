@@ -1,8 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { TrendChart, DistributionChart } from "@/components/Charts";
+import { DataModeBanner } from "@/components/DataModeBanner";
 import { STAT_TYPE_BY_ID } from "@/lib/stat-types/dictionary";
-import { getTeam, getTeamStat, SUPPORTED_STATS } from "@/lib/stats/query";
+import { getTeamStat, SUPPORTED_STATS } from "@/lib/stats/query";
+import { resolveRepository } from "@/lib/stats/repository";
+
+export const dynamic = "force-dynamic";
 
 const TIMEFRAMES = ["1m", "6m", "1y", "3y", "all"] as const;
 
@@ -58,12 +62,20 @@ export default async function TeamPage({
   const stat = sp.stat ?? "corners";
   const timeframe = sp.timeframe ?? "all";
 
-  const team = getTeam(teamId);
+  const { repo, active, configured, error } = await resolveRepository();
+
+  const team = await repo.getTeam(teamId);
   if (!team) notFound();
 
-  const result = getTeamStat({ teamId, statTypeId: stat, timeframe });
+  const result = await getTeamStat({ teamId, statTypeId: stat, timeframe });
   if (!result) notFound();
   const { summary, statName } = result;
+
+  // Resolve opponent names once up front — the recent-games list renders
+  // synchronously and cannot await per row.
+  const opponents = new Map(
+    (await repo.listTeams()).map((t) => [t.id, t] as const),
+  );
 
   const href = (next: { stat?: string; timeframe?: string }) =>
     `/team/${teamId}?stat=${next.stat ?? stat}&timeframe=${next.timeframe ?? timeframe}`;
@@ -77,6 +89,10 @@ export default async function TeamPage({
       <p style={{ color: "var(--muted)", marginTop: ".2rem" }}>
         {statName} · consensus across multiple sources
       </p>
+
+      <div style={{ marginTop: "1rem" }}>
+        <DataModeBanner active={active} configured={configured} error={error} />
+      </div>
 
       {/* Stat selector */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: ".4rem", marginTop: "1.25rem" }}>
@@ -127,7 +143,7 @@ export default async function TeamPage({
             <h2 style={{ fontSize: "1rem" }}>Recent games</h2>
             <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
               {[...summary.trend].reverse().slice(0, 10).map((g, i) => {
-                const opp = getTeam(g.opponentId);
+                const opp = opponents.get(g.opponentId);
                 return (
                   <div
                     key={i}
