@@ -17,7 +17,7 @@ and enterprise data feeds are intentionally **deferred to Phase 2/3**.
 | Consensus engine | `src/lib/consensus/` | Truth-discovery (CRH-style) weighting + copy detection. Reputation priors in `weights.ts`. |
 | Entity resolution | `src/lib/entity-resolution/` | Deterministic crosswalk → exact key → Jaro-Winkler fuzzy with a review queue. |
 | Stat dictionary | `src/lib/stat-types/dictionary.ts` | Superset of provider taxonomies. |
-| Provider adapters | `src/lib/providers/` | Uniform `ProviderAdapter` contract. Implemented: API-Football (box-score stats), The Odds API (implied win probability). |
+| Provider adapters | `src/lib/providers/` | Uniform `ProviderAdapter` contract. Implemented: API-Football and Sportmonks (overlapping box-score stats — the overlap is what gives consensus something to reconcile), The Odds API (implied win probability). `competitions.ts` translates one canonical competition slug into each provider's own league id. |
 | Ingestion pipeline | `src/lib/ingest/` | Adapters → entity resolution → raw `StatValue` → consensus → `ConsensusValue`. Repository-abstracted, so it unit-tests without a database. |
 | Read layer | `src/lib/stats/` | `StatsRepository` contract with demo and Prisma implementations; calculators for the dashboard totals/averages/trend/histogram. |
 | Typed env | `src/env.ts` | Zod-validated. Secrets are enforced by the features that consume them, not blanket-required at boot. |

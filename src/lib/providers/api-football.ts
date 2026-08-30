@@ -1,4 +1,5 @@
 import { env } from "@/env";
+import { requireNativeCompetitionId } from "./competitions";
 import type {
   FixtureRef,
   ProviderAdapter,
@@ -80,7 +81,7 @@ export class ApiFootballAdapter implements ProviderAdapter {
       teams: { home: { id: number; name: string }; away: { id: number; name: string } };
     };
     const response = await this.get<ApiFixture[]>("/fixtures", {
-      league: params.competition,
+      league: requireNativeCompetitionId(params.competition, this.id),
       from: params.from.toISOString().slice(0, 10),
       to: params.to.toISOString().slice(0, 10),
     });

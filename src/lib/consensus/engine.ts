@@ -25,6 +25,14 @@ export interface ConsensusResult<T = number> {
 const EPS = 1e-9;
 
 /**
+ * Minimum share of its reputation prior a source retains after a single match's
+ * disagreement. Keeps per-match reweighting from driving a dissenting source to
+ * zero influence, which the iteration cannot recover from. See the derivation
+ * in consensusContinuous.
+ */
+const LEARNED_FLOOR = 0.25;
+
+/**
  * Copy detection (blueprint Part 2c.5): sources sharing an `upstreamGroup`
  * (e.g. WhoScored echoing Opta) should not double-count. We split each group's
  * influence across its members so the group contributes roughly once.
@@ -70,9 +78,26 @@ export function consensusContinuous(
     const learned = errors.map((e) => -Math.log((e + EPS) / totalError));
     const maxLearned = Math.max(...learned, EPS);
 
-    // Combine reputation prior with observed accuracy this match.
+    // Combine reputation prior with observed accuracy this match, keeping a
+    // floor under the learned factor.
+    //
+    // Without the floor, a source whose error dominates gets
+    // errors[i]/totalError -> 1, hence learned[i] -> 0 and weight exactly 0.
+    // That is unrecoverable: at zero weight the source stops influencing the
+    // truth, which grows its error further, so the iteration runs away until
+    // one source wins outright. With few sources it always bites — at two
+    // sources, or three split 2-1, consensus collapsed onto a single value and
+    // reported variance 0, asserting perfect agreement about a number the
+    // sources actually disagreed on. Since disagreement is the thing this
+    // engine exists to measure, that failure mode is worse than being wrong.
+    //
+    // The floor lets one match down-weight a dissenter to at most this
+    // fraction of its prior, never silence it. Outlier suppression is
+    // preserved; annihilation is not.
     const next = observations.map(
-      (o, i) => (priors.get(o.sourceId) ?? 0.5) * (learned[i]! / maxLearned),
+      (o, i) =>
+        (priors.get(o.sourceId) ?? 0.5) *
+        (LEARNED_FLOOR + (1 - LEARNED_FLOOR) * (learned[i]! / maxLearned)),
     );
 
     const newTruth = weightedMean(observations, next);

@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { env, hasDatabase } from "@/env";
 import { adapters } from "@/lib/providers";
+import {
+  COMPETITIONS,
+  COMPETITION_BY_SLUG,
+} from "@/lib/providers/competitions";
 import { runIngestion } from "@/lib/ingest/pipeline";
 import { PrismaIngestRepository } from "@/lib/ingest/prisma-repository";
 
@@ -10,6 +14,9 @@ export const dynamic = "force-dynamic";
  * Data-ingestion cron endpoint. Protected by CRON_SECRET (blueprint security
  * notes) — callers must send `Authorization: Bearer $CRON_SECRET`. Wire this to
  * a scheduler (Vercel Cron / GitHub Actions) to poll providers on an interval.
+ *
+ * `competition` is our canonical slug (see lib/providers/competitions.ts), not a
+ * provider league id — each adapter translates it to its own scheme.
  *
  *   GET /api/cron/ingest?competition=england-premier-league&days=3
  */
@@ -47,7 +54,21 @@ export async function GET(request: Request) {
   const competition = url.searchParams.get("competition");
   if (!competition) {
     return NextResponse.json(
-      { error: "competition query param is required" },
+      {
+        error: "competition query param is required",
+        known: COMPETITIONS.map((c) => c.slug),
+      },
+      { status: 400 },
+    );
+  }
+  if (!COMPETITION_BY_SLUG.has(competition)) {
+    return NextResponse.json(
+      {
+        error: `unknown competition "${competition}"`,
+        detail:
+          "Pass the canonical slug, not a provider league id — adapters translate it themselves.",
+        known: COMPETITIONS.map((c) => c.slug),
+      },
       { status: 400 },
     );
   }

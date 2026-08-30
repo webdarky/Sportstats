@@ -18,6 +18,7 @@ curl https://<your-deployment>/api/health
   "counts": { "teams": 6, "matches": 30 },
   "providers": [
     { "id": "api_football", "configured": false },
+    { "id": "sportmonks", "configured": false },
     { "id": "the_odds_api", "configured": false }
   ],
   "ingestion": { "ready": false }
@@ -60,27 +61,26 @@ npm run db:seed        # 10 sports, 27 stat types, 18 source reputation priors
 
 | Provider | Sign-up link | Env var | Free tier | What it gives us |
 | --- | --- | --- | --- | --- |
-| **API-Football** | https://dashboard.api-football.com/register | `API_FOOTBALL_KEY` | 100 req/day | **The important one.** Fixtures + 16 team box-score stats (corners, cards, shots, possession, passes) + xG. Adapter implemented. |
-| **The Odds API** | https://the-odds-api.com/#get-access | `THE_ODDS_API_KEY` | 500 req/month | Odds from ~40 bookmakers → implied win probability. Adapter implemented. **No box-score stats.** |
-| **Sportmonks** | https://www.sportmonks.com/register | `SPORTMONKS_TOKEN` | Limited (one league) | Second box-score source. **Adapter not written yet.** |
+| **API-Football** | https://dashboard.api-football.com/register | `API_FOOTBALL_KEY` | 100 req/day | Fixtures + 16 team box-score stats (corners, cards, shots, possession, passes) + xG. |
+| **Sportmonks** | https://www.sportmonks.com/register | `SPORTMONKS_TOKEN` | Limited (one league) | Second box-score source, overlapping API-Football on 16 stats. **This is the one that makes consensus real.** |
+| **The Odds API** | https://the-odds-api.com/#get-access | `THE_ODDS_API_KEY` | 500 req/month | Odds from ~40 bookmakers → implied win probability. No box-score stats. |
 | **Football-Data.org** | https://www.football-data.org/client/register | `FOOTBALL_DATA_ORG_KEY` | 10 req/min | Fixtures/results, thin on stats. **Adapter not written yet.** |
 
-### Read this before choosing
+### Get both box-score keys, not just one
 
-The product's whole premise is reconciling sources that disagree. Right now only
-two adapters exist, and **they do not overlap**: API-Football supplies the
-box-score stats the dashboard displays; The Odds API supplies only win
-probability. So with both keys set, every displayed stat still has exactly *one*
-source, and the consensus engine returns that source's value at halved
-confidence. That is correct behaviour, not a bug — but it means the consensus
-layer is not yet doing real work on live data.
+The product's premise is reconciling sources that disagree, which takes at least
+two sources reporting *the same* stat. API-Football and Sportmonks overlap on 16
+statistics; The Odds API overlaps neither (it only reports win probability).
 
-Getting genuine multi-source consensus on corners/cards/shots needs a **second
-box-score provider**, which means writing a second adapter — Sportmonks is the
-natural candidate. Say the word and I will build it.
+- **API-Football alone** — the site shows real statistics, but every number has
+  a single observation. Consensus returns that value verbatim with zero spread,
+  and the provenance/variance signal stays dormant.
+- **API-Football + Sportmonks** — every displayed stat has two independent
+  observations. The truth-discovery engine reconciles them, disagreement shows
+  up as real variance, and the reconciliation layer starts earning its keep.
 
-So: **API-Football alone is enough to make the site show real statistics.** The
-rest is about making the consensus meaningful.
+Both have free tiers, so start with both. Sportmonks' free plan covers a single
+league; check which one before picking the competition to ingest.
 
 ## Step 4 — Set the cron secret
 
@@ -97,13 +97,21 @@ once the variable exists.
 
 ## Step 5 — Run the first ingestion manually
 
-Do this once before trusting the schedule. `competition` is the provider's own
-league id — `39` is the Premier League in API-Football.
+Do this once before trusting the schedule. `competition` is **our canonical
+slug**, not a provider league id — each adapter translates it to its own scheme
+(the Premier League is `39` to API-Football, `8` to Sportmonks and `soccer_epl`
+to The Odds API). Passing a raw provider id returns a 400 listing the valid
+slugs, rather than quietly fetching a different league from every other source.
 
 ```bash
 curl -H "Authorization: Bearer $CRON_SECRET" \
-  "https://<your-deployment>/api/cron/ingest?competition=39&days=3"
+  "https://<your-deployment>/api/cron/ingest?competition=england-premier-league&days=3"
 ```
+
+Currently registered: `england-premier-league` (all three providers),
+`spain-la-liga`, `italy-serie-a`, `germany-bundesliga`, `france-ligue-1`
+(API-Football and The Odds API; Sportmonks ids still to be filled in). Add more
+in `src/lib/providers/competitions.ts`.
 
 The response reports exactly what happened:
 
@@ -112,15 +120,17 @@ The response reports exactly what happened:
   "ok": true,
   "report": {
     "fixtures": 10,
-    "observations": 320,
+    "observations": 480,
     "consensusValues": 200,
-    "bySource": { "api_football": 320 },
+    "bySource": { "api_football": 320, "sportmonks": 160 },
     "errors": []
   }
 }
 ```
 
-`errors` is per-fixture and non-fatal — a partial run still persists what it got.
+`errors` is per-adapter and per-fixture, and non-fatal — a partial run still
+persists what it got. A missing league mapping shows up here by name rather than
+failing the whole run.
 
 Then reload the site. The banner should turn green and read **Live data**.
 
@@ -133,8 +143,9 @@ Then reload the site. The banner should turn green and read **Live data**.
 | `DATABASE_URL` | For live data | Postgres. Absent ⇒ demo mode. |
 | `DATA_SOURCE` | No | Pin `demo` or `postgres`. Defaults to `postgres` when `DATABASE_URL` is set. |
 | `CRON_SECRET` | For ingestion | Bearer token for `/api/cron/ingest`. |
-| `API_FOOTBALL_KEY` | For live data | API-Football. |
-| `THE_ODDS_API_KEY` | No | The Odds API. |
+| `API_FOOTBALL_KEY` | For live data | API-Football box-score stats. |
+| `SPORTMONKS_TOKEN` | Strongly recommended | Sportmonks box-score stats — the second source consensus needs. |
+| `THE_ODDS_API_KEY` | No | The Odds API implied win probability. |
 | `NEXT_PUBLIC_APP_URL` | No | Absolute URL for links. |
 
 `JWT_SECRET`, `NEXTAUTH_SECRET`, `ENCRYPTION_KEY` and `INTERNAL_API_SECRET` are
@@ -157,3 +168,16 @@ step 5.
 **Ingestion returns 503 "no providers configured".** No provider key is set.
 
 **Ingestion returns 500 with a foreign key error.** Step 2's seed did not run.
+
+**Ingestion returns 400 "unknown competition".** You passed a provider league id
+(e.g. `39`) instead of a canonical slug. The response lists the valid ones.
+
+**The report's `errors` mentions "No sportmonks league id mapped".** That
+competition has no Sportmonks id in the registry yet; the run still ingested
+every provider that does have one. Add the id in
+`src/lib/providers/competitions.ts`.
+
+**Consensus values look identical to one provider's numbers.** Expected with a
+single box-score source — there is nothing to reconcile. Add the second key
+(step 3) and re-run; `contributors` on each consensus row shows what was
+actually blended.

@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "crons": [
     {
-      "path": "/api/cron/ingest?competition=39&days=3",
+      "path": "/api/cron/ingest?competition=england-premier-league&days=3",
       "schedule": "0 4 * * *"
     }
   ]

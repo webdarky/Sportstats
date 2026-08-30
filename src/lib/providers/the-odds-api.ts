@@ -1,4 +1,5 @@
 import { env } from "@/env";
+import { requireNativeCompetitionId } from "./competitions";
 import type {
   FixtureRef,
   ProviderAdapter,
@@ -60,8 +61,9 @@ export class TheOddsApiAdapter implements ProviderAdapter {
     from: Date;
     to: Date;
   }): Promise<FixtureRef[]> {
+    const sportKey = requireNativeCompetitionId(params.competition, this.id);
     const events = await this.get<OddsEvent[]>(
-      `/sports/${params.competition}/events`,
+      `/sports/${sportKey}/events`,
       {
         dateFormat: "iso",
         commenceTimeFrom: params.from.toISOString().replace(/\.\d+Z$/, "Z"),
