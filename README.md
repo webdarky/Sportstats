@@ -23,6 +23,10 @@ and enterprise data feeds are intentionally **deferred to Phase 2/3**.
 | Typed env | `src/env.ts` | Zod-validated. Secrets are enforced by the features that consume them, not blanket-required at boot. |
 | Web shell | `src/app/` | Next.js (App Router) — fuzzy search, per-team stat dashboards, `/api/health`. |
 
+**Live:** https://sportstats-one.vercel.app — deployed from `main` on every push.
+`/api/health` there reports which data source is serving and which provider keys
+are configured.
+
 ## Getting started
 
 The app runs with **no configuration at all** — no database, no API keys:
